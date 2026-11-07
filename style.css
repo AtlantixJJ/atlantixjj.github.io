@@ -270,6 +270,27 @@ ul {
     line-height: 24px;
 }
 
+/* Keep long publication metadata and links beside their thumbnail. */
+.research-proj--aligned {
+    display: grid;
+    grid-template-columns: 150px minmax(0, 1fr);
+    column-gap: 30px;
+    align-items: start;
+}
+
+.research-proj--aligned .research-thumb {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    float: none;
+    padding-right: 0;
+}
+
+.research-proj--aligned .research-proj-title,
+.research-proj--aligned p {
+    grid-column: 2;
+    margin-left: 0;
+}
+
 .research-proj p strong {
     color: #fdc450;
     font-weight: 700;
