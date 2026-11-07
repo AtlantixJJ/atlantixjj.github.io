@@ -1,0 +1,197 @@
+<!doctype html>
+<!--
+  Spark Gaussian-splat viewer embedded (as an iframe) by index.html.
+    viewer.html?mode=canonical&s=<id>   canonical avatar resources/splats/<id>_canonical.spz
+    viewer.html?mode=4d                 4D sequence resources/splats/dnarendering_4d_*
+  Each viewer runs in its own document so Spark's module-level GPU state is never shared
+  between viewers. The parent posts "pause" / "resume" as the iframe leaves / enters view.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>ARG-Avatar viewer</title>
+<style>
+	html, body { margin: 0; height: 100%; overflow: hidden; background: #f5f6f8; }
+	body { font: 14px/1.4 "Inter", "Helvetica Neue", Helvetica, Arial, sans-serif; color: #5b6475; }
+	canvas { display: block; width: 100%; height: 100%; touch-action: none; outline: none; }
+	#msg {
+		position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+		text-align: center; padding: 16px; pointer-events: none;
+	}
+	#hint {
+		position: absolute; left: 0; right: 0; top: 10px; text-align: center; font-size: 13px;
+		pointer-events: none; opacity: 0; transition: opacity .6s;
+	}
+	#player {
+		position: absolute; left: 12px; right: 12px; bottom: 12px; display: flex; align-items: center; gap: 10px;
+		padding: 6px 10px; border-radius: 999px; background: rgba(255, 255, 255, .85); border: 1px solid #e3e6ec;
+	}
+	#player[hidden] { display: none; }
+	#player button {
+		font: inherit; font-weight: 500; cursor: pointer; min-width: 64px; padding: 4px 12px;
+		border-radius: 999px; border: 1px solid #e3e6ec; background: #fff; color: #1d2330;
+	}
+	#player input { flex: 1; min-width: 0; accent-color: #1d2330; }
+	#count { font-size: 12px; font-variant-numeric: tabular-nums; min-width: 74px; text-align: right; }
+</style>
+<script type="importmap">
+{"imports": {
+	"three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+	"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+	"@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/2.2.0/spark.module.js"
+}}
+</script>
+</head>
+<body>
+<div id="msg">Loading&hellip;</div>
+<div id="hint">Drag to rotate</div>
+<div id="player" hidden>
+	<button id="play">Pause</button>
+	<input type="range" id="scrub" min="0" max="0" value="0" aria-label="Frame">
+	<span id="count"></span>
+</div>
+<script type="module">
+const params = new URLSearchParams(location.search);
+const mode = params.get("mode") || "canonical";
+const SPLATS = new URL("./resources/splats/", location.href).href;
+const msg = document.getElementById("msg");
+const hint = document.getElementById("hint");
+const showMsg = (text) => { msg.textContent = text; msg.style.display = text ? "flex" : "none"; };
+
+try {
+	const THREE = await import("three");
+	const { OrbitControls } = await import("three/addons/controls/OrbitControls.js");
+	const { SparkRenderer, SplatMesh, SplatSkinning } = await import("@sparkjsdev/spark");
+
+	const renderer = new THREE.WebGLRenderer({ antialias: false });
+	if (!renderer.capabilities.isWebGL2) throw new Error("WebGL2 is not available in this browser.");
+	const coarse = matchMedia("(pointer: coarse)").matches;
+	renderer.setPixelRatio(Math.min(devicePixelRatio || 1, coarse ? 1.5 : 2));
+	renderer.setClearColor(0xf5f6f8, 1);
+	document.body.prepend(renderer.domElement);
+
+	const scene = new THREE.Scene();
+	const camera = new THREE.PerspectiveCamera(30, 1, 0.01, 100);
+	scene.add(new SparkRenderer({ renderer }));
+
+	// Rotate-only orbit around a standing avatar (feet at y = 0); page scrolling stays free.
+	const fitHeight = mode === "4d" ? 2.1 : 1.9;
+	const controls = new OrbitControls(camera, renderer.domElement);
+	controls.enablePan = false;
+	controls.enableZoom = false;
+	controls.enableDamping = true;
+	controls.dampingFactor = 0.1;
+	controls.rotateSpeed = 0.8;
+	controls.minPolarAngle = Math.PI * 0.2;
+	controls.maxPolarAngle = Math.PI * 0.8;
+	controls.target.set(0, fitHeight * 0.45, 0);
+	controls.autoRotate = mode !== "4d";
+	controls.autoRotateSpeed = 1.2;
+	camera.position.set(0, controls.target.y, 4);
+	renderer.domElement.addEventListener("pointerdown", () => {
+		controls.autoRotate = false;
+		hint.style.opacity = "0";
+	});
+
+	const resize = () => {
+		const w = Math.max(1, innerWidth), h = Math.max(1, innerHeight);
+		renderer.setSize(w, h, false);
+		camera.aspect = w / h;
+		const vFov = THREE.MathUtils.degToRad(camera.fov);
+		const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+		const dist = 0.55 * fitHeight / Math.tan(Math.min(vFov, hFov * 1.6) / 2);
+		camera.position.sub(controls.target).setLength(dist).add(controls.target);
+		camera.updateProjectionMatrix();
+	};
+	new ResizeObserver(resize).observe(document.body);
+	resize();
+
+	let onFrame = null, paused = false, lost = false;
+	const loop = () => { if (onFrame) onFrame(); controls.update(); renderer.render(scene, camera); };
+	const sync = () => renderer.setAnimationLoop(!paused && !document.hidden && !lost ? loop : null);
+	addEventListener("message", (e) => {
+		if (e.origin !== location.origin) return;
+		if (e.data === "pause" || e.data === "resume") { paused = e.data === "pause"; sync(); }
+	});
+	document.addEventListener("visibilitychange", sync);
+	renderer.domElement.addEventListener("webglcontextlost", (ev) => {
+		ev.preventDefault(); lost = true; sync();
+		showMsg("3D viewer paused. Reload the page to view it again.");
+	});
+
+	if (mode === "4d") {
+		const mesh = new SplatMesh({ url: SPLATS + "dnarendering_4d_rest.spz" });
+		// anim.bin.gz: "A4D1" | N | K | T (u32) | fps (f32) | skin u16[N*4] | bones f32[T*K*7]
+		const res = await fetch(SPLATS + "dnarendering_4d_anim.bin.gz");
+		if (!res.ok) throw new Error("HTTP " + res.status);
+		const buf = await new Response(res.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+		const dv = new DataView(buf);
+		const N = dv.getUint32(4, true), K = dv.getUint32(8, true), T = dv.getUint32(12, true);
+		const fps = dv.getFloat32(16, true);
+		const skin = new Uint16Array(buf, 20, N * 4);
+		const bones = new Float32Array(buf.slice(20 + N * 8));
+		await mesh.initialized;
+
+		// GPU skinning: each splat follows up to 4 of K bones; bone k at frame f maps the
+		// rest pose by x -> R x + t, stored as (qx, qy, qz, qw, tx, ty, tz).
+		const skinning = new SplatSkinning({ mesh, numBones: K });
+		skinning.skinData.set(skin);
+		skinning.skinTexture.needsUpdate = true;
+		const q = new THREE.Quaternion(), p = new THREE.Vector3();
+		for (let b = 0; b < K; b++) skinning.setRestQuatPos(b, q.set(0, 0, 0, 1), p.set(0, 0, 0));
+		mesh.skinning = skinning;
+		mesh.updateGenerator();
+		scene.add(mesh);
+
+		const playBtn = document.getElementById("play");
+		const scrub = document.getElementById("scrub");
+		const count = document.getElementById("count");
+		let frame = -1;
+		const show = (f) => {
+			if (f === frame) return;
+			frame = f;
+			const o = f * K * 7;
+			for (let b = 0; b < K; b++) {
+				const i = o + b * 7;
+				skinning.setBoneQuatPos(b, q.set(bones[i], bones[i + 1], bones[i + 2], bones[i + 3]),
+					p.set(bones[i + 4], bones[i + 5], bones[i + 6]));
+			}
+			skinning.updateBones();
+			scrub.value = String(f);
+			count.textContent = `${f + 1} / ${T}`;
+		};
+		let playing = true, t0 = performance.now(), f0 = 0;
+		onFrame = () => {
+			if (!playing) return;
+			const f = f0 + Math.floor(Math.max(0, performance.now() - t0) * fps / 1000);
+			show(((f % T) + T) % T);
+		};
+		scrub.max = String(T - 1);
+		playBtn.addEventListener("click", () => {
+			playing = !playing;
+			playBtn.textContent = playing ? "Pause" : "Play";
+			if (playing) { t0 = performance.now(); f0 = frame; }
+		});
+		scrub.addEventListener("input", () => {
+			playing = false; playBtn.textContent = "Play"; show(+scrub.value);
+		});
+		show(0);
+		document.getElementById("player").hidden = false;
+	} else {
+		const id = (params.get("s") || "neuman").replace(/[^a-z0-9_-]/gi, "");
+		const mesh = new SplatMesh({ url: SPLATS + id + "_canonical.spz" });
+		await mesh.initialized;
+		scene.add(mesh);
+	}
+	showMsg("");
+	hint.style.opacity = "1";
+	sync();
+} catch (err) {
+	console.error(err);
+	showMsg("Could not start the 3D viewer: " + (err && err.message || err));
+}
+</script>
+</body>
+</html>
