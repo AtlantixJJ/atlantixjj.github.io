@@ -76,8 +76,8 @@ try {
 	const camera = new THREE.PerspectiveCamera(30, 1, 0.01, 100);
 	scene.add(new SparkRenderer({ renderer }));
 
-	// Rotate-only orbit around a standing avatar (feet at y = 0); page scrolling stays free.
-	const fitHeight = mode === "4d" ? 2.1 : 1.9;
+	// Fit the camera to the scene; never resize the Gaussian positions to fit the viewer.
+	let fitHeight = mode === "4d" ? 2.1 : 1.9;
 	const controls = new OrbitControls(camera, renderer.domElement);
 	controls.enablePan = false;
 	controls.enableZoom = false;
@@ -85,7 +85,7 @@ try {
 	controls.dampingFactor = 0.1;
 	controls.rotateSpeed = 0.8;
 	controls.minPolarAngle = Math.PI * 0.2;
-	controls.maxPolarAngle = Math.PI * 0.8;
+	controls.maxPolarAngle = Math.PI * (mode === "4d" ? 0.49 : 0.8);
 	controls.target.set(0, fitHeight * 0.45, 0);
 	controls.autoRotate = mode !== "4d";
 	controls.autoRotateSpeed = 1.2;
@@ -134,6 +134,35 @@ try {
 		const bones = new Float32Array(buf.slice(20 + N * 8));
 		await mesh.initialized;
 
+		// Keep the Gaussian centers and scale intact. Use their bounds to frame the
+		// camera and size a fixed ground plane; place the avatar by its supporting foot.
+		const bounds = mesh.getBoundingBox();
+		const center = bounds.getCenter(new THREE.Vector3());
+		const height = bounds.max.y - bounds.min.y;
+		const footSamples = [];
+		const sampleStride = Math.max(1, Math.floor(N / 12000));
+		mesh.forEachSplat((index, position, scales, quaternion, opacity) => {
+			if (index % sampleStride === 0 && opacity > 0.2 && position.y < bounds.min.y + height * 0.15) {
+				footSamples.push({ index, position: position.clone() });
+			}
+		});
+		if (!footSamples.length) throw new Error("Could not locate the avatar's feet.");
+		const groundOffsets = new Float32Array(T).fill(NaN);
+		const groundSize = height * 3;
+		const ground = new THREE.Mesh(
+			new THREE.PlaneGeometry(groundSize, groundSize),
+			new THREE.MeshBasicMaterial({ color: 0xe9edf2, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 })
+		);
+		ground.rotation.x = -Math.PI / 2;
+		ground.position.set(center.x, 0, center.z);
+		const grid = new THREE.GridHelper(groundSize, 24, 0xc6ceda, 0xd6dde6);
+		grid.position.copy(ground.position);
+		scene.add(ground, grid);
+		fitHeight = height * 1.15;
+		controls.target.set(center.x, height * 0.45, center.z);
+		camera.position.set(center.x, height * 0.65, center.z + height * 2);
+		resize();
+
 		// GPU skinning: each splat follows up to 4 of K bones; bone k at frame f maps the
 		// rest pose by x -> R x + t, stored as (qx, qy, qz, qw, tx, ty, tz).
 		const skinning = new SplatSkinning({ mesh, numBones: K });
@@ -159,6 +188,33 @@ try {
 					p.set(bones[i + 4], bones[i + 5], bones[i + 6]));
 			}
 			skinning.updateBones();
+			if (Number.isNaN(groundOffsets[f])) {
+				let footY = Infinity;
+				// Mirror Spark's dual-quaternion skinning for a small set of foot samples.
+				// Cache only the vertical object placement, never normalize individual splats
+				// or recenter their horizontal motion as the pose changes.
+				const data = skinning.boneData;
+				for (const sample of footSamples) {
+					let rx = 0, ry = 0, rz = 0, rw = 0, dx = 0, dy = 0, dz = 0, dw = 0;
+					for (let j = 0; j < 4; j++) {
+						const packed = skin[sample.index * 4 + j];
+						const weight = (packed & 255) / 255;
+						if (!weight) continue;
+						const i = (packed >>> 8) * 16;
+						const sign = rx * data[i] + ry * data[i + 1] + rz * data[i + 2] + rw * data[i + 3] < 0 ? -1 : 1;
+						const w = weight * sign;
+						rx += w * data[i]; ry += w * data[i + 1]; rz += w * data[i + 2]; rw += w * data[i + 3];
+						dx += w * data[i + 4]; dy += w * data[i + 5]; dz += w * data[i + 6]; dw += w * data[i + 7];
+					}
+					const normSq = rx * rx + ry * ry + rz * rz + rw * rw;
+					const { x, y, z } = sample.position;
+					const rotatedY = y + 2 * (rz * (ry * z - rz * y + rw * x) - rx * (rx * y - ry * x + rw * z)) / normSq;
+					const translatedY = 2 * (-dw * ry + dx * rz + dy * rw - dz * rx) / normSq;
+					footY = Math.min(footY, rotatedY + translatedY);
+				}
+				groundOffsets[f] = -footY;
+			}
+			mesh.position.y = groundOffsets[f];
 			scrub.value = String(f);
 			count.textContent = `${f + 1} / ${T}`;
 		};

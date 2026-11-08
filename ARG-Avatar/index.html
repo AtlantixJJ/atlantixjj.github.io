@@ -79,12 +79,6 @@
 			background: var(--bg-soft); border: 1px solid var(--border);
 		}
 		.viewer iframe { display: block; width: 100%; height: 100%; border: 0; }
-		.viewer .load-btn {
-			position: absolute; inset: 0; margin: auto; width: max-content; height: max-content;
-			font: inherit; font-size: 15px; font-weight: 500; cursor: pointer;
-			padding: 10px 20px; border-radius: 999px; border: 0; background: var(--fg); color: var(--bg);
-		}
-		.viewer .load-btn small { opacity: .75; font-size: 12px; margin-left: 6px; }
 		.picker { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 16px; }
 		.pick {
 			font: inherit; cursor: pointer; padding: 6px 6px 4px; width: 104px;
@@ -183,15 +177,6 @@
 			<h2>Pose-Driven Animation</h2>
 			<p class="sub">The same avatars driven by novel motion sequences.</p>
 			<div class="gallery" id="gallery"></div>
-		</section>
-
-		<section id="dynamic">
-			<h2>4D Gaussian Animation</h2>
-			<p class="sub">The full animated Gaussian sequence of one avatar, played back in 3D. Rotate the view while it moves.</p>
-			<div class="viewer" id="anim-viewer">
-				<button class="load-btn" id="anim-load">Load 4D sequence<small>7 MB</small></button>
-			</div>
-			<p class="note">DNARendering subject, 112-frame dance loop at 30 fps, 570K Gaussians per frame. For in-browser playback the per-frame Gaussian positions are compressed into a 256-bone skinning fit (median deviation 1 mm from the model output) and animated on the GPU.</p>
 		</section>
 
 		<section id="quantitative">
@@ -308,12 +293,6 @@
 			selectSubject(SUBJECTS.find((s) => picker.querySelector(`[data-id="${s.id}"]`).getAttribute("aria-pressed") === "true"));
 		}, { rootMargin: "400px" });
 		nearCanon.observe(canonEl);
-
-		/* 4D sequence: loaded on demand */
-		document.getElementById("anim-load").addEventListener("click", (ev) => {
-			ev.currentTarget.remove();
-			mountViewer(document.getElementById("anim-viewer"), "mode=4d", "4D Gaussian animation viewer");
-		});
 	</script>
 </body>
 </html>
